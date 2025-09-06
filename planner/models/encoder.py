@@ -18,6 +18,10 @@ class PositionEncoding(nn.Module):
     def __init__(self, dim: int, max_len: int = 10):
         super(PositionEncoding, self).__init__()
 
+        # 保证 dim 为偶数，如果是奇数则增加 1
+        if dim % 2 != 0:
+            dim += 1  # 如果是奇数，增加 1 使其变为偶数
+
         pe = torch.zeros(max_len, dim)
         position = torch.arange(0, max_len).float().unsqueeze(1)
         div_term = torch.exp(torch.arange(0, dim, 2).float() * -(math.log(10000.0) / dim))
@@ -26,9 +30,21 @@ class PositionEncoding(nn.Module):
         self.register_buffer('pe', pe)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x shape: [B, T, D]
-        # Add position encoding to the input tensor
-        return x + self.pe[:x.size(1), :]
+        """
+        x shape: [B, T, D]
+        Add position encoding to the input tensor.
+        """
+        B, T, D = x.shape
+        
+        # 确保 position encoding 的维度与输入的 T 和 D 一致
+        pe = self.pe[:T, :].unsqueeze(0).repeat(B, 1, 1)  # [B, T, D]
+
+        # 如果 dim 为偶数，但实际 out_dim 是奇数，则丢弃多余的维度
+        if pe.size(2) > D:
+            pe = pe[:, :, :D]  # 保证位置编码的维度与输入特征维度一致
+
+        return x + pe  # Add position encoding to the input tensor
+
 
 
 class FourierEncoder(nn.Module):
@@ -71,7 +87,7 @@ class FourierEncoder(nn.Module):
         return feats
 
 class LidarEncoder(nn.Module):
-    def __init__(self, lidar_dim: int, method: str = "raw"):
+    def __init__(self, lidar_dim: int, out_dim: int, method: str = "raw"):
         """
         lidar_dim: 雷达输入的维度 (通常是 30)
         method: 选择处理方式 ("raw", "mlp", "conv1d")
@@ -83,14 +99,14 @@ class LidarEncoder(nn.Module):
             self.mlp = nn.Sequential(
                 nn.Linear(lidar_dim, 128),
                 SWiGLU(),
-                nn.Linear(128, 64),
+                nn.Linear(128, out_dim),
                 SWiGLU(),
             )
         elif method == "conv1d":
             self.conv1d = nn.Sequential(
                 nn.Conv1d(1, 16, kernel_size=3, stride=1, padding=1),
                 nn.ReLU(),
-                nn.Conv1d(16, 32, kernel_size=3, stride=1, padding=1),
+                nn.Conv1d(16, out_dim, kernel_size=3, stride=1, padding=1),
                 nn.ReLU()
             )
         # 默认的 "raw" 方法就是不做处理
@@ -155,14 +171,20 @@ class Feature_Encoder(nn.Module):
         # 计算输出维度
         per_dim = (1 + 2 * n_scales) if include_input else (2 * n_scales)
         self.scalar_enc_dim = 5 * per_dim
-        self.out_dim = self.scalar_enc_dim + self.lidar_dim
-
         # —— 内部 FIFO 状态 ——
         self._buf: Optional[torch.Tensor] = None   # [B, T, out_dim]
         self._filled: int = 0
         self._batch_size: Optional[int] = None
 
-        self.lidar_encoder = LidarEncoder(lidar_dim=self.lidar_dim, method="mlp")
+        self.lidar_encode_method = "mlp"
+        self.lidar_out_dim = 64
+        self.lidar_encoder = LidarEncoder(lidar_dim=self.lidar_dim, out_dim=self.lidar_out_dim, method=self.lidar_encode_method)
+        if self.lidar_encode_method == "raw":
+            self.out_dim = self.scalar_enc_dim + self.lidar_dim
+        else:
+            self.out_dim = self.scalar_enc_dim + self.lidar_out_dim
+
+
 
         # —— 位置编码器 —— 这里我们为 T 维度加位置编码
         self.position_encoder = PositionEncoding(dim=self.out_dim, max_len=seq_len)
