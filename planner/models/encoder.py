@@ -152,6 +152,7 @@ class Feature_Encoder(nn.Module):
         fill_with_first: bool = True,  # 首帧是否填满队列
         n_scales: int = 4,
         include_input: bool = True,
+        lidar_encode_mode: str = "mlp"
     ):
         super().__init__()
         assert input_dim >= 5, "input_dim 应为 5 + lidar_dim"
@@ -176,7 +177,7 @@ class Feature_Encoder(nn.Module):
         self._filled: int = 0
         self._batch_size: Optional[int] = None
 
-        self.lidar_encode_method = "mlp"
+        self.lidar_encode_method = lidar_encode_mode
         self.lidar_out_dim = 64
         self.lidar_encoder = LidarEncoder(lidar_dim=self.lidar_dim, out_dim=self.lidar_out_dim, method=self.lidar_encode_method)
         if self.lidar_encode_method == "raw":
