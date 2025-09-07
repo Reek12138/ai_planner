@@ -14,6 +14,19 @@ class SWiGLU(nn.Module):
 
     def forward(self, x):
         return F.silu(x) * F.sigmoid(x)
+    
+class Score_head(nn.Module):
+    def __init__(self, input_dim: int, n_points: int, hidden_dim: int):
+        super().__init__()
+        self.score_head = nn.Sequential(
+            nn.Linear(input_dim*n_points, hidden_dim),
+            SWiGLU(),
+            nn.Linear(hidden_dim, 1),
+            SWiGLU()
+        )
+    def forward(self, x):
+        return self.score_head(x)
+    
 
 class Anchor_Free_Decoder(nn.Module):
     def __init__(self, input_dim: int, 
@@ -31,6 +44,8 @@ class Anchor_Free_Decoder(nn.Module):
             nn.Linear(n_points*hidden_dim, n_points*input_dim),
             SWiGLU()
         )
+        self.score_head = Score_head(input_dim=input_dim, n_points=n_points, hidden_dim=hidden_dim)
+
         self.use_residual = use_residual
         self.traj_output_head = nn.Linear(input_dim, 2)
     
@@ -54,7 +69,10 @@ class Anchor_Free_Decoder(nn.Module):
 
         traj_points = self.traj_output_head(ffn_output) #[B, n_traj, n_points, 2]
 
-        return traj_points, ffn_output
+        traj_score = self.score_head(ffn_output.view(B, self.n_traj, self.n_points*D))
+        traj_probs = torch.softmax(traj_score, dim=-1) #[B, n_traj, score_prob]
+
+        return traj_points, ffn_output, traj_probs
     
 
 class Anchor_Based_Decoder(nn.Module):
@@ -74,12 +92,7 @@ class Anchor_Based_Decoder(nn.Module):
 
         self.use_residual = use_residual
         self.traj_output_head = nn.Linear(input_dim, 2)
-        self.score_head = nn.Sequential(
-            nn.Linear(input_dim*n_points, hidden_dim),
-            SWiGLU(),
-            nn.Linear(hidden_dim, 1),
-            SWiGLU()
-        )
+        self.score_head = Score_head(input_dim=input_dim, n_points=n_points, hidden_dim=hidden_dim)
     
         self.n_traj = n_traj
         self.n_points = n_points
@@ -108,7 +121,7 @@ class Anchor_Based_Decoder(nn.Module):
 
         traj_offset = self.traj_output_head(ffn_output) #[B, n_traj, n_points, 2]
         traj_score = self.score_head(ffn_output.view(B, self.n_traj, self.n_points*D))
-        traj_probs = torch.softmax(traj_score, dim=-1)
+        traj_probs = torch.softmax(traj_score, dim=-1) #[B, n_traj, score_prob]
 
         return traj_offset, traj_probs
 
@@ -128,5 +141,14 @@ class TRAJ_Decoder(nn.Module):
     def forward(self, x):
         B, T, D = x.shape
 
+        init_traj, traj_feature, _ = self.anchor_free_decoder(x)
 
-        return x
+        traj_offset, traj_probs = self.anchor_based_decoder(traj_feature, x)
+
+        final_traj = init_traj + traj_offset
+
+        _, best_traj_idx = torch.max(traj_probs, dim=-1)
+
+        best_traj = torch.gather(final_traj, 1, best_traj_idx.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self.n_points, 2))
+
+        return best_traj
