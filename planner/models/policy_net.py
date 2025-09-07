@@ -27,4 +27,13 @@ class PolicyNet(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # return torch.tanh(self.mlp(x))
-        raise NotImplementedError("Please implement PolicyNet.forward()")
+
+        feature = self.encoder(x) #B T D
+
+        traj = self.decoder(feature)
+
+        # TODO:后处理
+
+        return traj
+
+        # raise NotImplementedError("Please implement PolicyNet.forward()")

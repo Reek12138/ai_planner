@@ -323,7 +323,7 @@ class Feature_Encoder(nn.Module):
         # 将结果拼接到原始输入上
         # output = torch.cat([x, output], dim=-1)  # [B, T, 2D]
 
-        return output  # [B, T, 2D]
+        return output  # [B, T, D]
 
 
         
